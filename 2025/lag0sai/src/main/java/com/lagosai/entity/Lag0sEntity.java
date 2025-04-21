@@ -16,9 +16,9 @@ import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
-import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
 import com.lagosai.entity.ai.goal.LookAtPlayerBasedOnPerceptionGoal;
 import com.lagosai.entity.ai.goal.SurvivalPanicGoal;
+import com.lagosai.entity.ai.goal.PersonalityRandomStrollGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -65,6 +65,8 @@ public class Lag0sEntity extends PathfinderMob {
     private boolean needsSpeedUpdate = true; // Flag to update modifier initially/on load
 
     private static final float BASE_STROLL_PROBABILITY = 0.001F; // Vanilla default chance per tick
+    private static final float BASE_INTERACTION_INFO_CHANCE = 0.75f; // Base chance to share info
+    private static final float PERSONALITY_INFO_FACTOR = 0.5f; // How much F/T affects chance
 
     public Lag0sEntity(EntityType<? extends PathfinderMob> type, Level level) {
         super(type, level);
@@ -74,10 +76,12 @@ public class Lag0sEntity extends PathfinderMob {
             capabilityXP.put(stat, INITIAL_XP_VALUE);
         }
         
-        this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new SurvivalPanicGoal(this, 1.2D));
-        this.goalSelector.addGoal(2, new RandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(3, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F));
+        // AI Goals (Lower number = higher priority)
+        this.goalSelector.addGoal(0, new FloatGoal(this)); 
+        this.goalSelector.addGoal(1, new SurvivalPanicGoal(this, 1.2D)); 
+        // Replace vanilla goal with our custom one
+        this.goalSelector.addGoal(2, new PersonalityRandomStrollGoal(this, 1.0D)); 
+        this.goalSelector.addGoal(3, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F)); 
     }
 
     @Override
@@ -213,26 +217,38 @@ public class Lag0sEntity extends PathfinderMob {
     @Override
     public InteractionResult mobInteract(Player player, InteractionHand hand) {
         if (!this.level().isClientSide()) {
-            player.displayClientMessage(Component.literal("Lag0s personality: " + personality.toString()), false);
-            player.displayClientMessage(Component.literal("Rank: " + this.societalRank.name() + " - " + this.societalRank.getDescription()), false);
-            this.getTrade().ifPresent(t -> 
-                player.displayClientMessage(Component.literal("Trade: " + t.name() + " - " + t.getModernRole()), false)
-            );
-            player.displayClientMessage(Component.literal(String.format("STATS: Perception=%.2f XP: %.2f / %.2f", 
-                getCapabilityStatValue(CapabilityStat.PERCEPTION), 
-                getCapabilityXP(CapabilityStat.PERCEPTION), 
-                getXpThreshold(CapabilityStat.PERCEPTION))), false);
-            // Display Survival stat too
-            player.displayClientMessage(Component.literal(String.format("SURVIVAL=%.2f XP: %.2f / %.2f", 
-                getCapabilityStatValue(CapabilityStat.SURVIVAL), 
-                getCapabilityXP(CapabilityStat.SURVIVAL), 
-                getXpThreshold(CapabilityStat.SURVIVAL))), false);
-            // Grant Social XP 
-            this.gainXp(CapabilityStat.SOCIAL, SOCIAL_XP_PER_INTERACTION);
-            player.displayClientMessage(Component.literal(String.format("SOCIAL XP +%.2f -> %.2f", 
-                 SOCIAL_XP_PER_INTERACTION, getCapabilityXP(CapabilityStat.SOCIAL))), false); 
+            // Determine willingness to share info based on T/F
+            float feelingTrait = this.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.FEELING);
+            float thinkingTrait = this.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.THINKING);
+            float feelingFactor = (feelingTrait - thinkingTrait); // Ranges -1 (Strong T) to +1 (Strong F)
+            // Feeling increases chance, Thinking decreases it
+            float shareChance = BASE_INTERACTION_INFO_CHANCE + (feelingFactor * PERSONALITY_INFO_FACTOR);
+            shareChance = Math.max(0.1f, Math.min(1.0f, shareChance)); // Clamp chance 10%-100%
 
-            // Evolve personality based on social interaction
+            if (this.random.nextFloat() < shareChance) {
+                // Display info only if check passes
+                player.displayClientMessage(Component.literal("--- Lag0s Info ---"), false);
+                player.displayClientMessage(Component.literal("Personality: " + personality.toString()), false);
+                player.displayClientMessage(Component.literal("Rank: " + this.societalRank.name() + " - " + this.societalRank.getDescription()), false); 
+                this.getTrade().ifPresent(t -> 
+                    player.displayClientMessage(Component.literal("Trade: " + t.name() + " - " + t.getModernRole()), false)
+                );
+                player.displayClientMessage(Component.literal(String.format("STATS: Perception=%.2f XP: %.2f / %.2f", 
+                    getCapabilityStatValue(CapabilityStat.PERCEPTION), 
+                    getCapabilityXP(CapabilityStat.PERCEPTION), 
+                    getXpThreshold(CapabilityStat.PERCEPTION))), false);
+                player.displayClientMessage(Component.literal(String.format("SURVIVAL=%.2f XP: %.2f / %.2f", 
+                    getCapabilityStatValue(CapabilityStat.SURVIVAL), 
+                    getCapabilityXP(CapabilityStat.SURVIVAL), 
+                    getXpThreshold(CapabilityStat.SURVIVAL))), false);
+                player.displayClientMessage(Component.literal(String.format("SOCIAL XP +%.2f -> %.2f", 
+                     SOCIAL_XP_PER_INTERACTION, getCapabilityXP(CapabilityStat.SOCIAL) + SOCIAL_XP_PER_INTERACTION)), false); 
+            } else {
+                 player.displayClientMessage(Component.literal("Lag0s seems preoccupied..."), false);
+            }
+
+            // Grant Social XP & Evolve personality regardless of sharing info
+            this.gainXp(CapabilityStat.SOCIAL, SOCIAL_XP_PER_INTERACTION);
             this.personality.evolve(PersonalityProfile.TraitAxis.EXTRAVERT, SOCIAL_EVOLVE_DELTA);
             this.personality.evolve(PersonalityProfile.TraitAxis.FEELING, SOCIAL_EVOLVE_DELTA);
         }
