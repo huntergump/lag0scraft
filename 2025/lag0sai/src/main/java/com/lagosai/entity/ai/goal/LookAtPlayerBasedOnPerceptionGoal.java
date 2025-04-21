@@ -2,6 +2,7 @@ package com.lagosai.entity.ai.goal;
 
 import com.lagosai.entity.CapabilityStat;
 import com.lagosai.entity.Lag0sEntity;
+import com.lagosai.entity.PersonalityProfile;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.targeting.TargetingConditions;
@@ -13,10 +14,14 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
     protected LivingEntity lookAt;
     protected final float baseLookDistance;
     protected int lookTime;
-    private final float probability;
+    private final float baseProbability;
+    private float probability;
     protected final Class<? extends LivingEntity> lookAtType;
     protected final TargetingConditions lookAtContext;
     private static final float PERCEPTION_DISTANCE_MULTIPLIER = 16.0f; // Max distance increase at max perception
+    private static final int BASE_LOOK_TIME_TICKS = 40; // Base duration
+    private static final int MAX_LOOK_TIME_VARIANCE = 20; // Max random variance
+    private static final float PERSONALITY_TIME_FACTOR = 20.0f; // How much S/N affects duration (in ticks)
 
     public LookAtPlayerBasedOnPerceptionGoal(Lag0sEntity pMob, Class<? extends LivingEntity> pLookAtType, float pLookDistance) {
         this(pMob, pLookAtType, pLookDistance, 0.02F); // Default probability
@@ -26,6 +31,7 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
         this.mob = pMob;
         this.lookAtType = pLookAtType;
         this.baseLookDistance = pLookDistance;
+        this.baseProbability = pProbability;
         this.probability = pProbability;
         this.setFlags(EnumSet.of(Goal.Flag.LOOK)); // Sets this goal controls looking
         // Set up targeting conditions, adjusting for player specifics if needed
@@ -47,8 +53,15 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        // Adjust probability based on E/I trait before checking
+        float extraversion = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.EXTRAVERT);
+        float introversion = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.INTROVERT);
+        // Example scaling: Increase chance with extraversion, decrease with introversion
+        float personalityFactor = 1.0f + (extraversion * 1.5f) - (introversion * 0.8f); // Adjusted multipliers
+        float currentProbability = Math.max(0.0f, this.baseProbability * personalityFactor); // Ensure probability doesn't go below 0
+        
         // Check probability
-        if (this.mob.getRandom().nextFloat() >= this.probability) {
+        if (this.mob.getRandom().nextFloat() >= currentProbability) { // Use adjusted probability
             return false;
         }
         
@@ -67,9 +80,11 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
             TargetingConditions playerContext = this.lookAtContext.copy().range(Math.sqrt(getDynamicLookDistanceSqr()));
             this.lookAt = this.mob.level().getNearestPlayer(playerContext, this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ());
         } else {
+            // Ensure non-player lookup also uses dynamic distance
+            double dynamicDistance = Math.sqrt(getDynamicLookDistanceSqr());
             this.lookAt = this.mob.level().getNearestEntity(
-                this.mob.level().getEntitiesOfClass(this.lookAtType, this.mob.getBoundingBox().inflate(Math.sqrt(getDynamicLookDistanceSqr()), 3.0, Math.sqrt(getDynamicLookDistanceSqr())), (p_147175_) -> true),
-                TargetingConditions.forNonCombat().range(Math.sqrt(getDynamicLookDistanceSqr())), 
+                this.mob.level().getEntitiesOfClass(this.lookAtType, this.mob.getBoundingBox().inflate(dynamicDistance, 3.0, dynamicDistance), (p_147175_) -> true),
+                TargetingConditions.forNonCombat().range(dynamicDistance), // Use dynamic distance here too
                 this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ()
             );
         }
@@ -92,9 +107,18 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
 
     @Override
     public void start() {
-        // Set look time (how long to stare)
-        this.lookTime = this.adjustedTickDelay(40 + this.mob.getRandom().nextInt(20));
-        // Grant more significant Perception XP upon starting to look at something
+        // Calculate base look time with random variance
+        int baseDuration = BASE_LOOK_TIME_TICKS + this.mob.getRandom().nextInt(MAX_LOOK_TIME_VARIANCE);
+        
+        // Adjust duration based on S/N trait
+        float sensingValue = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.SENSING);
+        float intuitionValue = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.INTUITION);
+        // Sensing increases duration, Intuition decreases it
+        float personalityAdjustment = (sensingValue - intuitionValue) * PERSONALITY_TIME_FACTOR;
+        
+        this.lookTime = this.adjustedTickDelay(Math.max(1, (int)(baseDuration + personalityAdjustment))); // Ensure lookTime is at least 1 tick
+
+        // Grant Perception XP 
         this.mob.gainXp(CapabilityStat.PERCEPTION, 0.5f); 
     }
 

@@ -49,4 +49,8 @@ public class PersonalityProfile {
             }
         }
     }
+
+    public float getTraitValue(TraitAxis axis) {
+        return traits.getOrDefault(axis, 0.5f);
+    }
 } 

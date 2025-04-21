@@ -18,6 +18,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
 import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
 import com.lagosai.entity.ai.goal.LookAtPlayerBasedOnPerceptionGoal;
+import com.lagosai.entity.ai.goal.SurvivalPanicGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -30,6 +31,8 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.MobCategory;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 
 public class Lag0sEntity extends PathfinderMob {
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID_ID = 
@@ -57,6 +60,12 @@ public class Lag0sEntity extends PathfinderMob {
     private static final float SOCIAL_EVOLVE_DELTA = 0.01f;
     private static final float HURT_EVOLVE_DELTA = 0.015f;
 
+    // Modifier for movement speed based on MOBILITY stat
+    private static final UUID MOBILITY_MODIFIER_ID = UUID.fromString("1a8f8e66-b2e4-4b1c-8a1a-a0d78e8b0b9f"); // Random UUID
+    private boolean needsSpeedUpdate = true; // Flag to update modifier initially/on load
+
+    private static final float BASE_STROLL_PROBABILITY = 0.001F; // Vanilla default chance per tick
+
     public Lag0sEntity(EntityType<? extends PathfinderMob> type, Level level) {
         super(type, level);
         // Initialize capabilities
@@ -66,28 +75,9 @@ public class Lag0sEntity extends PathfinderMob {
         }
         
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new RandomStrollGoal(this, 1.0D) {
-            @Override
-            public void tick() {
-                // Adjust speed dynamically based on MOBILITY stat before ticking
-                float mobilityValue = Lag0sEntity.this.getCapabilityStatValue(CapabilityStat.MOBILITY);
-                // Simple scaling: Base speed attribute * (1 + mobility * factor)
-                // Note: Vanilla RandomStrollGoal uses a speed modifier, not absolute speed.
-                // We might need a custom goal or adjust the entity's speed attribute directly.
-                // For now, let's just log it and gain XP.
-                
-                double dynamicSpeedModifier = 1.0 + (mobilityValue * MOBILITY_SPEED_FACTOR); // Example modifier calculation
-                 // ((RandomStrollGoal)this).speedModifier = dynamicSpeedModifier; // Can't directly modify parent private fields easily
-
-                super.tick(); // Perform original stroll logic
-                
-                // Add XP periodically
-                if (Lag0sEntity.this.tickCount % 20 == 0) { 
-                   Lag0sEntity.this.gainXp(CapabilityStat.MOBILITY, MOBILITY_XP_PER_STROLL_TICK * 20);
-                }
-            }
-        });
-        this.goalSelector.addGoal(2, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F));
+        this.goalSelector.addGoal(1, new SurvivalPanicGoal(this, 1.2D));
+        this.goalSelector.addGoal(2, new RandomStrollGoal(this, 1.0D));
+        this.goalSelector.addGoal(3, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F));
     }
 
     @Override
@@ -164,6 +154,19 @@ public class Lag0sEntity extends PathfinderMob {
                 capabilityXP.put(stat, xpTag.getFloat(stat.name())); // Defaults to 0f if not found
             }
         } // Consider initializing if tag doesn't exist?
+
+        // Flag that speed needs recalculating after loading stats
+        this.needsSpeedUpdate = true; 
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        // Update speed modifier if needed (e.g., after loading or level up)
+        if (this.needsSpeedUpdate && !this.level().isClientSide()) {
+            this.updateMobilitySpeedModifier();
+            this.needsSpeedUpdate = false;
+        }
     }
 
     public Optional<UUID> getOwnerUUID() {
@@ -185,6 +188,10 @@ public class Lag0sEntity extends PathfinderMob {
 
     public void setTrade(Optional<Trade> trade) {
         this.trade = trade;
+    }
+
+    public PersonalityProfile getPersonalityProfile() {
+        return this.personality;
     }
 
     @Override
@@ -265,15 +272,44 @@ public class Lag0sEntity extends PathfinderMob {
         return BASE_XP_THRESHOLD * (float)Math.pow(XP_THRESHOLD_SCALING, Math.max(0, currentLevelFactor - 1)); 
     }
 
-    // Method to increase stat value (level up)
+    // Method to calculate and apply the speed modifier based on MOBILITY
+    private void updateMobilitySpeedModifier() {
+        AttributeInstance speedAttribute = this.getAttribute(Attributes.MOVEMENT_SPEED);
+        if (speedAttribute == null) return;
+
+        // Remove existing modifier using its UUID
+        speedAttribute.removeModifier(MOBILITY_MODIFIER_ID);
+        // No need to track the modifier object itself anymore if we always remove by ID
+        // this.mobilitySpeedModifier = null; 
+
+        // Calculate new modifier value 
+        float mobilityValue = getCapabilityStatValue(CapabilityStat.MOBILITY);
+        double baseSpeed = speedAttribute.getBaseValue(); 
+        double addedSpeed = baseSpeed * mobilityValue * MOBILITY_SPEED_FACTOR;
+
+        // Create and add the new modifier
+        AttributeModifier newModifier = new AttributeModifier(MOBILITY_MODIFIER_ID, 
+                                                         "Mobility Bonus", 
+                                                         addedSpeed, 
+                                                         AttributeModifier.Operation.ADDITION); 
+        
+        speedAttribute.addPermanentModifier(newModifier);
+        
+        Lag0sMod.LOGGER.debug("Applied speed modifier {} based on mobility {}", addedSpeed, mobilityValue);
+    }
+
+    // Override levelUpStat to flag speed update
     private void levelUpStat(CapabilityStat stat) {
         float currentValue = getCapabilityStatValue(stat);
-        if (currentValue < MAX_STAT_VALUE) { // Check against max value
-            // Increase stat value by a fixed amount or percentage? Let's use a fixed step for now.
-            float newValue = Math.min(MAX_STAT_VALUE, currentValue + 0.1f); // Increase by 0.1, cap at MAX
+        if (currentValue < MAX_STAT_VALUE) { 
+            float newValue = Math.min(MAX_STAT_VALUE, currentValue + 0.1f); 
             capabilityStats.put(stat, newValue);
             Lag0sMod.LOGGER.info("{} leveled up {} to {}", this.getName().getString(), stat.name(), newValue);
-            // Potentially trigger other effects on level up here
+            
+            // Flag for speed update if MOBILITY changed
+            if (stat == CapabilityStat.MOBILITY) {
+                this.needsSpeedUpdate = true;
+            }
         }
     }
 
