@@ -1,6 +1,8 @@
 package com.lagosai.entity;
 
 import com.lagosai.Lag0sMod;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -14,8 +16,8 @@ import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeSupplier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
-import net.minecraft.world.entity.ai.goal.LookAtPlayerGoal;
 import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
+import com.lagosai.entity.ai.goal.LookAtPlayerBasedOnPerceptionGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -26,6 +28,8 @@ import net.minecraft.world.level.LevelAccessor;
 import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.ai.goal.Goal;
+import net.minecraft.world.damagesource.DamageSource;
 
 public class Lag0sEntity extends PathfinderMob {
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID_ID = 
@@ -35,12 +39,55 @@ public class Lag0sEntity extends PathfinderMob {
     private Optional<UUID> ownerUUID = Optional.empty();
     private SocietalRank societalRank = SocietalRank.FIELD_ASSOCIATE;
     private Optional<Trade> trade = Optional.empty();
+    
+    // Capability Stats and XP
+    private final EnumMap<CapabilityStat, Float> capabilityStats = new EnumMap<>(CapabilityStat.class);
+    private final EnumMap<CapabilityStat, Float> capabilityXP = new EnumMap<>(CapabilityStat.class);
+    private static final float INITIAL_STAT_VALUE = 0.1f; // Example starting value
+    private static final float INITIAL_XP_VALUE = 0.0f;
+    // XP Threshold constants
+    private static final float BASE_XP_THRESHOLD = 100.0f;
+    private static final float XP_THRESHOLD_SCALING = 1.1f; // Threshold increases by 10% each level (example)
+    private static final float MAX_STAT_VALUE = 1.0f; // Example max stat value
+    private static final float MOBILITY_XP_PER_STROLL_TICK = 0.01f; // Tiny amount per tick
+    private static final float SOCIAL_XP_PER_INTERACTION = 1.0f;
+    private static final float BASE_MOVEMENT_SPEED = 0.25f; // Corresponds to Attribute
+    private static final float MOBILITY_SPEED_FACTOR = 0.5f; // How much mobility affects speed (0.0 to 1.0)
+    private static final float SURVIVAL_XP_PER_DAMAGE = 0.5f; // Example
+    private static final float SOCIAL_EVOLVE_DELTA = 0.01f;
+    private static final float HURT_EVOLVE_DELTA = 0.015f;
 
     public Lag0sEntity(EntityType<? extends PathfinderMob> type, Level level) {
         super(type, level);
+        // Initialize capabilities
+        for (CapabilityStat stat : CapabilityStat.values()) {
+            capabilityStats.put(stat, INITIAL_STAT_VALUE);
+            capabilityXP.put(stat, INITIAL_XP_VALUE);
+        }
+        
         this.goalSelector.addGoal(0, new FloatGoal(this));
-        this.goalSelector.addGoal(1, new RandomStrollGoal(this, 1.0D));
-        this.goalSelector.addGoal(2, new LookAtPlayerGoal(this, Player.class, 6.0F));
+        this.goalSelector.addGoal(1, new RandomStrollGoal(this, 1.0D) {
+            @Override
+            public void tick() {
+                // Adjust speed dynamically based on MOBILITY stat before ticking
+                float mobilityValue = Lag0sEntity.this.getCapabilityStatValue(CapabilityStat.MOBILITY);
+                // Simple scaling: Base speed attribute * (1 + mobility * factor)
+                // Note: Vanilla RandomStrollGoal uses a speed modifier, not absolute speed.
+                // We might need a custom goal or adjust the entity's speed attribute directly.
+                // For now, let's just log it and gain XP.
+                
+                double dynamicSpeedModifier = 1.0 + (mobilityValue * MOBILITY_SPEED_FACTOR); // Example modifier calculation
+                 // ((RandomStrollGoal)this).speedModifier = dynamicSpeedModifier; // Can't directly modify parent private fields easily
+
+                super.tick(); // Perform original stroll logic
+                
+                // Add XP periodically
+                if (Lag0sEntity.this.tickCount % 20 == 0) { 
+                   Lag0sEntity.this.gainXp(CapabilityStat.MOBILITY, MOBILITY_XP_PER_STROLL_TICK * 20);
+                }
+            }
+        });
+        this.goalSelector.addGoal(2, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F));
     }
 
     @Override
@@ -56,6 +103,20 @@ public class Lag0sEntity extends PathfinderMob {
         this.getOwnerUUID().ifPresent(uuid -> pCompound.putUUID("OwnerUUID", uuid));
         pCompound.putString("SocietalRank", this.societalRank.name());
         this.trade.ifPresent(t -> pCompound.putString("Trade", t.name()));
+
+        // Save Capability Stats
+        CompoundTag capsTag = new CompoundTag();
+        for (Map.Entry<CapabilityStat, Float> entry : capabilityStats.entrySet()) {
+            capsTag.putFloat(entry.getKey().name(), entry.getValue());
+        }
+        pCompound.put("CapabilityStats", capsTag);
+
+        // Save Capability XP
+        CompoundTag xpTag = new CompoundTag();
+        for (Map.Entry<CapabilityStat, Float> entry : capabilityXP.entrySet()) {
+            xpTag.putFloat(entry.getKey().name(), entry.getValue());
+        }
+        pCompound.put("CapabilityXP", xpTag);
     }
 
     @Override
@@ -87,6 +148,22 @@ public class Lag0sEntity extends PathfinderMob {
         } else {
             this.trade = Optional.empty();
         }
+
+        // Load Capability Stats
+        if (pCompound.contains("CapabilityStats", CompoundTag.TAG_COMPOUND)) {
+            CompoundTag capsTag = pCompound.getCompound("CapabilityStats");
+            for (CapabilityStat stat : CapabilityStat.values()) {
+                capabilityStats.put(stat, capsTag.getFloat(stat.name())); // Defaults to 0f if not found
+            }
+        } // Consider initializing if tag doesn't exist?
+
+        // Load Capability XP
+        if (pCompound.contains("CapabilityXP", CompoundTag.TAG_COMPOUND)) {
+            CompoundTag xpTag = pCompound.getCompound("CapabilityXP");
+            for (CapabilityStat stat : CapabilityStat.values()) {
+                capabilityXP.put(stat, xpTag.getFloat(stat.name())); // Defaults to 0f if not found
+            }
+        } // Consider initializing if tag doesn't exist?
     }
 
     public Optional<UUID> getOwnerUUID() {
@@ -111,6 +188,22 @@ public class Lag0sEntity extends PathfinderMob {
     }
 
     @Override
+    public boolean hurt(DamageSource pSource, float pAmount) {
+        boolean wasHurt = super.hurt(pSource, pAmount);
+        if (wasHurt && !this.level().isClientSide()) {
+            // Grant survival XP
+            this.gainXp(CapabilityStat.SURVIVAL, pAmount * SURVIVAL_XP_PER_DAMAGE);
+            Lag0sMod.LOGGER.debug("{} took {} damage, gained {} SURVIVAL XP", 
+                this.getName().getString(), pAmount, pAmount * SURVIVAL_XP_PER_DAMAGE);
+            
+            // Evolve personality based on negative experience
+            this.personality.evolve(PersonalityProfile.TraitAxis.INTROVERT, HURT_EVOLVE_DELTA);
+            this.personality.evolve(PersonalityProfile.TraitAxis.SENSING, HURT_EVOLVE_DELTA); // Focus on immediate facts
+        }
+        return wasHurt;
+    }
+
+    @Override
     public InteractionResult mobInteract(Player player, InteractionHand hand) {
         if (!this.level().isClientSide()) {
             player.displayClientMessage(Component.literal("Lag0s personality: " + personality.toString()), false);
@@ -118,6 +211,23 @@ public class Lag0sEntity extends PathfinderMob {
             this.getTrade().ifPresent(t -> 
                 player.displayClientMessage(Component.literal("Trade: " + t.name() + " - " + t.getModernRole()), false)
             );
+            player.displayClientMessage(Component.literal(String.format("STATS: Perception=%.2f XP: %.2f / %.2f", 
+                getCapabilityStatValue(CapabilityStat.PERCEPTION), 
+                getCapabilityXP(CapabilityStat.PERCEPTION), 
+                getXpThreshold(CapabilityStat.PERCEPTION))), false);
+            // Display Survival stat too
+            player.displayClientMessage(Component.literal(String.format("SURVIVAL=%.2f XP: %.2f / %.2f", 
+                getCapabilityStatValue(CapabilityStat.SURVIVAL), 
+                getCapabilityXP(CapabilityStat.SURVIVAL), 
+                getXpThreshold(CapabilityStat.SURVIVAL))), false);
+            // Grant Social XP 
+            this.gainXp(CapabilityStat.SOCIAL, SOCIAL_XP_PER_INTERACTION);
+            player.displayClientMessage(Component.literal(String.format("SOCIAL XP +%.2f -> %.2f", 
+                 SOCIAL_XP_PER_INTERACTION, getCapabilityXP(CapabilityStat.SOCIAL))), false); 
+
+            // Evolve personality based on social interaction
+            this.personality.evolve(PersonalityProfile.TraitAxis.EXTRAVERT, SOCIAL_EVOLVE_DELTA);
+            this.personality.evolve(PersonalityProfile.TraitAxis.FEELING, SOCIAL_EVOLVE_DELTA);
         }
         return InteractionResult.SUCCESS;
     }
@@ -135,6 +245,76 @@ public class Lag0sEntity extends PathfinderMob {
     /* Old attribute registration - commented out
     public static void registerAttributes() {
         // ...
+    }
+    */
+
+    // Add getters for Capability Stats/XP (more complex logic later)
+    public float getCapabilityStatValue(CapabilityStat stat) {
+        return this.capabilityStats.getOrDefault(stat, INITIAL_STAT_VALUE);
+    }
+
+    public float getCapabilityXP(CapabilityStat stat) {
+        return this.capabilityXP.getOrDefault(stat, INITIAL_XP_VALUE);
+    }
+
+    // Method to calculate XP threshold for the *next* level of a stat
+    private float getXpThreshold(CapabilityStat stat) {
+        float currentLevelFactor = getCapabilityStatValue(stat) / INITIAL_STAT_VALUE; // Rough level factor
+        // Simple scaling example: base * (scaling ^ (level - 1))
+        // Since our stat value isn't integer levels, we use the factor
+        return BASE_XP_THRESHOLD * (float)Math.pow(XP_THRESHOLD_SCALING, Math.max(0, currentLevelFactor - 1)); 
+    }
+
+    // Method to increase stat value (level up)
+    private void levelUpStat(CapabilityStat stat) {
+        float currentValue = getCapabilityStatValue(stat);
+        if (currentValue < MAX_STAT_VALUE) { // Check against max value
+            // Increase stat value by a fixed amount or percentage? Let's use a fixed step for now.
+            float newValue = Math.min(MAX_STAT_VALUE, currentValue + 0.1f); // Increase by 0.1, cap at MAX
+            capabilityStats.put(stat, newValue);
+            Lag0sMod.LOGGER.info("{} leveled up {} to {}", this.getName().getString(), stat.name(), newValue);
+            // Potentially trigger other effects on level up here
+        }
+    }
+
+    // Gain XP and check for level up
+    public void gainXp(CapabilityStat stat, float amount) {
+        if (amount <= 0) return;
+
+        float currentXP = getCapabilityXP(stat);
+        float threshold = getXpThreshold(stat);
+        float newXP = currentXP + amount;
+
+        Lag0sMod.LOGGER.debug("Gaining {} XP for {}. Current: {}, Threshold: {}", amount, stat.name(), currentXP, threshold); // Debug log
+
+        while (newXP >= threshold) {
+            levelUpStat(stat);
+            newXP -= threshold;
+            threshold = getXpThreshold(stat); // Recalculate threshold for the new level
+             if (getCapabilityStatValue(stat) >= MAX_STAT_VALUE) {
+                newXP = 0; // Cap XP if max level reached to prevent infinite loops
+                break;
+            }
+        }
+
+        capabilityXP.put(stat, newXP);
+    }
+
+    // Add a method to get the dynamic speed based on MOBILITY
+    public float getDynamicSpeed() {
+        float mobilityValue = getCapabilityStatValue(CapabilityStat.MOBILITY);
+        // Adjust base speed attribute value based on mobility
+        return BASE_MOVEMENT_SPEED * (1.0f + (mobilityValue * MOBILITY_SPEED_FACTOR));
+    }
+
+    // Override getMovementSpeed() to potentially use our dynamic speed
+    // NOTE: This affects ALL movement, not just strolling. Consider carefully.
+    /* 
+    @Override
+    public float getMovementSpeed() {
+        // Could return getDynamicSpeed() here, but it might interfere with other systems.
+        // A better approach might be needed, like modifying the attribute instance directly.
+        return super.getMovementSpeed(); 
     }
     */
 } 
