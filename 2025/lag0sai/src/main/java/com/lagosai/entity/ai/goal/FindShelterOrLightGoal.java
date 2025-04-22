@@ -2,6 +2,7 @@ package com.lagosai.entity.ai.goal;
 
 import com.lagosai.Lag0sMod;
 import com.lagosai.entity.Lag0sEntity;
+import com.lagosai.entity.ai.Objective;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
@@ -28,6 +29,15 @@ public class FindShelterOrLightGoal extends Goal {
 
     @Override
     public boolean canUse() {
+        // Check 1: Is the current objective related to survival/shelter?
+        if (this.mob.getCurrentObjective() != Objective.ENSURE_SURVIVAL) {
+            return false; // Don't seek shelter if the objective is different
+        }
+        
+        // Check 2: Cooldown (if we add one later)
+        // if (this.nextStartTick > 0) { ... }
+        
+        // Check 3: Does the environment actually require shelter?
         Level level = this.mob.level();
         boolean isNight = level.isNight();
         boolean isRaining = level.isRaining();
@@ -35,13 +45,14 @@ public class FindShelterOrLightGoal extends Goal {
         boolean canSeeSky = level.canSeeSky(this.mob.blockPosition());
         boolean needsShelterCondition = (isNight || isRaining || isThundering) && canSeeSky;
         
-        Lag0sMod.LOGGER.debug("FindShelter: Night={}, Rain={}, Thunder={}, SeeSky={}, NeedsShelterCondition={}", 
-                              isNight, isRaining, isThundering, canSeeSky, needsShelterCondition);
+        Lag0sMod.LOGGER.debug("FindShelter: Objective={}, Night={}, Rain={}, Thunder={}, SeeSky={}, NeedsShelterCondition={}", 
+                              this.mob.getCurrentObjective(), isNight, isRaining, isThundering, canSeeSky, needsShelterCondition);
 
         if (!needsShelterCondition) {
-            return false;
+            return false; // Conditions don't require shelter right now
         }
 
+        // Check 4: Is the current spot already safe?
         boolean currentlyUnsafe = isPositionUnsafe(level, this.mob.blockPosition());
         Lag0sMod.LOGGER.debug("FindShelter: Currently Unsafe = {}", currentlyUnsafe);
         
@@ -49,6 +60,7 @@ public class FindShelterOrLightGoal extends Goal {
              return false; // Don't activate if already safe
         }
         
+        // Check 5: Can we find a suitable safe spot?
         boolean foundTarget = findRandomSafePos();
         Lag0sMod.LOGGER.debug("FindShelter: Found Target Pos = {}", foundTarget);
         return foundTarget;
@@ -56,11 +68,22 @@ public class FindShelterOrLightGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        boolean pathDone = this.mob.getNavigation().isDone();
+        // Check if the initial reason for seeking shelter still applies
+        Level level = this.mob.level();
+        boolean needsShelterCondition = (level.isNight() || level.isRaining() || level.isThundering()) 
+                               && level.canSeeSky(this.mob.blockPosition()); // Re-check condition
+
+        // Also check if current position is unsafe 
         boolean stillUnsafe = isPositionUnsafe(this.mob.level(), this.mob.blockPosition());
-        boolean canContinue = this.targetPos != null && !pathDone && stillUnsafe;
-        Lag0sMod.LOGGER.debug("FindShelter: Continue? Target={}, PathDone={}, StillUnsafe={}, Result={}", 
-                              this.targetPos != null, pathDone, stillUnsafe, canContinue);
+        
+        // Continue only if shelter is still needed AND current pos is unsafe AND path isn't done
+        boolean canContinue = needsShelterCondition && 
+                              this.targetPos != null && 
+                              !this.mob.getNavigation().isDone() && 
+                              stillUnsafe;
+                              
+        Lag0sMod.LOGGER.debug("FindShelter: Continue? NeedsShelter={}, Target={}, PathDone={}, StillUnsafe={}, Result={}", 
+                              needsShelterCondition, this.targetPos != null, this.mob.getNavigation().isDone(), stillUnsafe, canContinue);
         return canContinue;
     }
 

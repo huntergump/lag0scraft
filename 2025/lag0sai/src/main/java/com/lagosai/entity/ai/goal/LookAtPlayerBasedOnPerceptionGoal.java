@@ -8,6 +8,7 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.ai.targeting.TargetingConditions;
 import net.minecraft.world.entity.player.Player;
 import java.util.EnumSet;
+import com.lagosai.entity.ai.Objective;
 
 public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
     protected final Lag0sEntity mob;
@@ -53,38 +54,43 @@ public class LookAtPlayerBasedOnPerceptionGoal extends Goal {
 
     @Override
     public boolean canUse() {
-        // Adjust probability based on E/I trait before checking
+        // Check 1: Is the current objective compatible?
+        Objective currentObj = this.mob.getCurrentObjective();
+        if (currentObj != Objective.SOCIALIZE && 
+            currentObj != Objective.EXPLORE_LEARN && 
+            currentObj != Objective.IDLE) {
+            // Lag0sMod.LOGGER.trace("LookAtPlayerGoal: Objective {} not suitable.", currentObj);
+            return false;
+        }
+
+        // Check 2: Adjust probability based on E/I trait
         float extraversion = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.EXTRAVERT);
         float introversion = this.mob.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.INTROVERT);
-        // Example scaling: Increase chance with extraversion, decrease with introversion
-        float personalityFactor = 1.0f + (extraversion * 1.5f) - (introversion * 0.8f); // Adjusted multipliers
-        float currentProbability = Math.max(0.0f, this.baseProbability * personalityFactor); // Ensure probability doesn't go below 0
+        float personalityFactor = 1.0f + (extraversion * 1.5f) - (introversion * 0.8f); 
+        float currentProbability = Math.max(0.0f, this.baseProbability * personalityFactor); 
         
-        // Check probability
-        if (this.mob.getRandom().nextFloat() >= currentProbability) { // Use adjusted probability
+        // Check 3: Probability check
+        if (this.mob.getRandom().nextFloat() >= currentProbability) {
             return false;
         }
         
-        // Grant perception XP occasionally just for trying
-        if (this.mob.tickCount % 40 == 0) { // Reduced frequency
+        // Check 4: Grant perception XP 
+        if (this.mob.tickCount % 40 == 0) { 
             this.mob.gainXp(CapabilityStat.PERCEPTION, 0.05f); 
         }
         
-        // Find closest entity of the target type within dynamic range
-        if (this.mob.getTarget() != null) { // Don't look if already targeting something else
+        // Check 5: Find lookAt target using dynamic distance
+        if (this.mob.getTarget() != null) {
             this.lookAt = this.mob.getTarget();
         }
-
         if (this.lookAtType == Player.class) {
-            // Use adjusted look context for players
             TargetingConditions playerContext = this.lookAtContext.copy().range(Math.sqrt(getDynamicLookDistanceSqr()));
             this.lookAt = this.mob.level().getNearestPlayer(playerContext, this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ());
         } else {
-            // Ensure non-player lookup also uses dynamic distance
             double dynamicDistance = Math.sqrt(getDynamicLookDistanceSqr());
             this.lookAt = this.mob.level().getNearestEntity(
                 this.mob.level().getEntitiesOfClass(this.lookAtType, this.mob.getBoundingBox().inflate(dynamicDistance, 3.0, dynamicDistance), (p_147175_) -> true),
-                TargetingConditions.forNonCombat().range(dynamicDistance), // Use dynamic distance here too
+                TargetingConditions.forNonCombat().range(dynamicDistance), 
                 this.mob, this.mob.getX(), this.mob.getEyeY(), this.mob.getZ()
             );
         }

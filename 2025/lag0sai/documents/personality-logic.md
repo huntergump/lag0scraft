@@ -1,93 +1,107 @@
 # Lag0s NPC AI Logic Framework
 
-This document outlines the interconnected systems governing the behavior, progression, and state of the Lag0s NPC.
+This document outlines the interconnected systems governing the behavior, progression, and state of the Lag0s NPC, using a hybrid architecture inspired by LLM-agent principles but implemented with game-performance constraints in mind.
 
-## I. Core Driver: Hierarchy of Needs
+## I. Core Architecture: Reasoning Layer + Action Layer
 
-This system, inspired by Maslow's hierarchy, provides the fundamental motivation and prioritization for the NPC's actions. Goals are generally selected based on the lowest unmet need.
+1.  **Reasoning Layer (`BehaviorManager` - Conceptual):** Runs periodically (e.g., every ~1 second). Responsible for high-level decision making.
+    *   **Assesses State:** Evaluates internal state (Needs, Stats, Personality, Rank, Trade) and relevant external context (Time, Weather, Nearby Entities/Blocks).
+    *   **Consults Memory:** Reads recent events, known locations, interaction history from the `EntityMemory` component.
+    *   **Prioritizes Need:** Determines the most pressing need based on the Hierarchy of Needs.
+    *   **Selects Objective:** Chooses a high-level objective (e.g., `EnsureSafety`, `GatherResources`, `Socialize`, `PursuePurpose`) based on the primary need, influenced by Personality, Stats, Rank, Trade, and Memory.
+    *   **Manages Goals:** Activates/deactivates specific low-level AI Goals in the Action Layer to achieve the selected objective. Manages conflicting goals (e.g., deactivates wandering when fleeing).
+    *   **Updates Memory:** Logs significant events, discoveries, or outcomes back to the `EntityMemory`.
+2.  **Action Layer (Minecraft Goal System):** Executes specific, low-level tasks.
+    *   Comprises standard (`FloatGoal`, `AvoidEntityGoal`) and custom (`BreakBlockGoal`, `FindShelterGoal`, etc.) AI Goals.
+    *   Goals are managed (added/removed) by the Reasoning Layer.
+    *   Goals focus on execution (pathfinding, animation, interaction logic) and may directly grant Capability XP or trigger Personality evolution upon completion/ticks.
+3.  **Memory Component (`EntityMemory` - Conceptual):** Stores contextual information persistently via NBT.
+    *   *Examples:* Last known threat location, home/shelter location, list of recent interactions, significant events (level ups, rank changes, major fights).
 
-1.  **Survival (Highest Priority):** Immediate physiological needs and safety.
-    *   *Goal Examples:* Avoid Hostiles, Panic/Flee when hurt, Seek Shelter/Light (at night/bad weather), Find Food (Future).
-    *   *Focus:* Staying alive, avoiding damage, basic environmental safety.
-2.  **Comfort & Safety:** Establishing security and stability.
-    *   *Goal Examples:* Gather Basic Resources (Wood, Stone), Build Simple Shelter.
-    *   *Focus:* Creating a secure base, acquiring essential materials.
-3.  **Social:** Belonging and interaction.
-    *   *Goal Examples:* LookAtPlayer, InteractWithPlayer (when possible), FollowPlayer (conditional), InteractWithNPCs (Future).
-    *   *Focus:* Engaging with other entities.
-4.  **Purpose:** Esteem, achievement, and progression.
-    *   *Goal Examples:* Goals related to Trade (Gather specific resources, Craft items), Goals related to Rank (Meet stat/task requirements).
-    *   *Focus:* Specializing, achieving status, pursuing defined roles.
-5.  **Winning / Self-Actualization:** State when lower needs and current goals are met.
-    *   *Goal Examples:* Idle behaviors, Explore (different from basic wandering), Seek Knowledge (gain LEARNING XP), Generate new long-term Purpose goals.
-    *   *Focus:* High-level functioning when basic needs are satisfied.
+## II. Core Driver: Hierarchy of Needs
 
-## II. Capability Stats (Effectiveness & Skill)
+Guides the **Reasoning Layer's** prioritization.
 
-These represent the NPC's learned skills and raw abilities in performing tasks. They progress through XP gain from relevant actions.
+1.  **Survival:** Avoid threats, seek immediate safety (light/shelter at night/rain). Innate behaviors prioritized.
+2.  **Comfort & Safety:** Establish security (better shelter, resources, tools).
+3.  **Social:** Interact with others.
+4.  **Purpose:** Pursue goals related to Rank & Trade.
+5.  **Winning / Self-Actualization:** Idle, explore, learn, seek new purpose when other needs met.
 
-*   **Stat List:**
-    *   `PERCEPTION`: Affects detection range, awareness of environment/entities.
-    *   `MOBILITY`: Affects movement speed, agility, pathfinding success.
-    *   `SURVIVAL`: Affects resilience, health management, effectiveness of panic/avoidance.
-    *   `CRAFTING`: Affects ability to manipulate blocks, build, use tools.
-    *   `SOCIAL`: Affects effectiveness of social interactions (trading, negotiation - future).
-    *   `LEARNING`: Affects the rate of XP gain across other stats.
-*   **Progression:**
-    *   Tracked via `capabilityXP` map (`float`).
-    *   Increased by `gainXp(CapabilityStat stat, float amount)` when performing related actions.
-    *   Stat *value* (0.0-1.0, stored in `capabilityStats` map) increases via `levelUpStat(CapabilityStat stat)` when XP threshold is met.
-    *   XP threshold scales with current stat value (`getXpThreshold`).
-    *   XP generally only increases; the stat value represents the current peak skill level.
-*   **NBT Persistence:** Both `capabilityStats` and `capabilityXP` maps are saved.
+## III. Modifying Factors
 
-## III. Personality Traits (Style & Preference)
+These influence both the Reasoning Layer's decisions and the Action Layer's execution:
 
-Based on MBTI axes, these traits determine *how* an NPC prefers to behave and make decisions. They evolve slowly based on experiences.
+*   **Capability Stats:** Primarily affect Action Layer effectiveness (speed, range, success chance) and are prerequisites for Purpose/Rank goals.
+*   **Personality Traits:** Primarily affect Reasoning Layer objective selection (preference for social vs. solitary, planned vs. spontaneous) and Action Layer style (look duration, panic chance).
+*   **Societal Rank:** Primarily gates Purpose goals and influences social interactions (Future).
+*   **Trade:** Primarily gates Purpose goals related to specific skills (Future).
 
-*   **Axes (stored in `PersonalityProfile.traits` map):**
-    *   `EXTRAVERT` / `INTROVERT`: Social orientation.
-    *   `SENSING` / `INTUITION`: Information gathering preference.
-    *   `THINKING` / `FEELING`: Decision-making preference.
-    *   `JUDGING` / `PERCEIVING`: Lifestyle orientation (structured vs. spontaneous).
-*   **Evolution:**
-    *   Traits adjusted via `personality.evolve(TraitAxis axis, float delta)`.
-    *   Currently evolves based on `hurt` (-> Introvert, Sensing) and `mobInteract` (-> Extravert, Feeling).
-    *   Future: Add more evolution triggers based on action outcomes (success/failure), environment, etc.
-*   **Interpretation:**
-    *   `getMBTIType()` provides a 4-letter summary.
-    *   `getTraitValue(TraitAxis axis)` provides the raw float value.
-*   **NBT Persistence:** `PersonalityProfile` saves/loads its `traits` map.
+## IV. Development Steps (Revised)
 
-## IV. Societal Rank (Status & Progression Path)
+### 1. Implement Core Data Structures & Persistence (NBT)
 
-Represents the NPC's standing within a defined hierarchy. Progression is milestone-based, not XP-based.
+*   **Status:** DONE
+*   **Components:** `CapabilityStat` (Values & XP), `PersonalityProfile` (Traits), `SocietalRank`, `Trade`.
 
-*   **Ranks:** Defined in `SocietalRank` enum (FIELD_ASSOCIATE to SOVEREIGN_CHAIR), each with a description.
-*   **Progression (Future - Step 5):**
-    *   NPCs start at `FIELD_ASSOCIATE`.
-    *   Advancement requires meeting criteria (Capability Stat thresholds, task completion, etc.).
-    *   Higher ranks are designed to be progressively rarer (Scarcity/Competition mechanics needed).
-*   **NBT Persistence:** Current `societalRank` is saved/loaded.
+### 2. Develop Capability Stat XP/Leveling Logic
 
-## V. Trade (Specialization)
+*   **Status:** DONE
+*   **Components:** `gainXp`, `levelUpStat`, `getXpThreshold`.
 
-Provides a specific role or skill focus, primarily relevant for mid-tier ranks.
+### 3. Develop Personality Logic & Evolution
 
-*   **Trades:** Defined in `Trade` enum (BLACKSMITH, CARPENTER, etc.), each with descriptions.
-*   **Assignment (Future - Step 5):**
-    *   NPCs start with no trade (`Optional.empty()`).
-    *   Trade selection/assignment likely tied to reaching specific ranks (e.g., SKILLED_TECHNICIAN) and potentially influenced by high Capability Stats or Personality.
-*   **Progression (Future):** Could potentially have its own XP/Mastery system to unlock trade-specific abilities or recipes.
-*   **NBT Persistence:** Current `trade` (if present) is saved/loaded.
+*   **Status:** DONE (Basic)
+*   **Components:** `getMBTIType`, `evolve`, initial evolution triggers.
 
-## VI. System Interactions & Influences
+### 4. Implement Basic Action Layer Goals
 
-These systems are designed to work together:
+*   **Status:** IN PROGRESS
+*   **Goal:** Create the library of low-level actions the Reasoning Layer can choose from.
+*   **Components:**
+    *   Survival: `FloatGoal`, `SurvivalPanicGoal`, `AvoidEntityGoal`, `FindShelterOrLightGoal` (DONE - needs debugging).
+    *   Comfort/Safety: `BreakBlockGoal` (DONE - needs debugging).
+    *   Social: `LookAtPlayerBasedOnPerceptionGoal` (DONE).
+    *   Movement: `RandomStrollGoal` (Vanilla - DONE).
+    *   *Future:* Add more goals for each need category.
 
-*   **Hierarchy -> Goal Selection:** The primary driver. Goals fulfilling lower unmet needs generally take priority.
-*   **Stats -> Goal Effectiveness:** Capability Stats directly impact the *success* or *parameters* of AI Goals (e.g., Perception range, Mobility speed, Survival panic chance, Crafting success - future).
-*   **Personality -> Goal Style/Preference:** Personality Traits influence the *likelihood* of choosing certain goals (e.g., E/I affecting social vs. solitary goals, J/P affecting wandering vs. task focus) and the *parameters* within goals (e.g., S/N affecting look duration).
-*   **Actions -> Stats & Personality:** Performing actions grants Capability XP (`gainXp`), and the outcome or context of actions can trigger Personality Evolution (`evolve`).
-*   **Stats/Tasks -> Rank/Trade:** Achieving specific Capability Stat levels and completing certain tasks will be the criteria for progressing in Rank and potentially selecting a Trade (Future).
-*   **Rank/Trade -> Goals:** Higher Ranks or specific Trades will unlock new, more complex AI Goals related to Purpose (Future).
+### 5. Implement Reasoning Layer (BehaviorManager & Memory)
+
+*   **Status:** NOT STARTED
+*   **Goal:** Create the core decision-making engine.
+*   **How:**
+    *   Create `BehaviorManager` class/logic within `Lag0sEntity`'s `tick()`.
+    *   Implement Needs Assessment logic.
+    *   Implement basic Objective Selection logic (initially focusing on Survival/Safety).
+    *   Implement dynamic Goal Management (add/remove goals based on objective).
+    *   Create basic `EntityMemory` class and NBT persistence.
+
+### 6. Integrate Systems in AI Goals
+
+*   **Status:** IN PROGRESS
+*   **Goal:** Ensure Action Layer goals correctly use Stats/Personality and grant XP/trigger evolution.
+*   **How:** Refine existing goals (`BreakBlockGoal` animation/targeting, `FindShelterGoal` stopping logic), add checks/influences to future goals.
+
+### 7. Develop Rank & Trade Progression Logic (Future Step)
+
+*   **Status:** NOT STARTED
+
+### 8. Implement Trade & Purpose-Driven AI Goals (Future Step)
+
+*   **Status:** NOT STARTED
+
+### 9. Refine Appearance (Lower Priority)
+
+*   **Status:** NOT STARTED
+
+### 10. Refine Spawner Item (Lower Priority)
+
+*   **Status:** NOT STARTED
+
+### 11. Future Enhancements / Advanced AI
+
+*   Recovery Score, Advanced Needs, Complex Learning, NPC<->NPC Interaction, Storytelling.
+
+---
+
+**Recommended Next Step:** Debug and refine the existing Survival/Safety goals (`FindShelterOrLightGoal`, `BreakBlockGoal`) as part of Step #6, then begin implementing the basic Reasoning Layer structure (Step #5).
