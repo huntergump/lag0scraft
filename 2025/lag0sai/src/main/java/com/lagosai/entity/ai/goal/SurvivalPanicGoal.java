@@ -1,5 +1,6 @@
 package com.lagosai.entity.ai.goal;
 
+import com.lagosai.Lag0sMod;
 import com.lagosai.entity.CapabilityStat;
 import com.lagosai.entity.Lag0sEntity;
 import com.lagosai.entity.PersonalityProfile;
@@ -15,25 +16,28 @@ public class SurvivalPanicGoal extends PanicGoal {
 
     @Override
     public boolean canUse() {
-        // Only trigger if the default PanicGoal condition (being hurt) is met
-        if (!super.canUse()) {
+        boolean shouldPanicInitially = super.canUse();
+        Lag0sMod.LOGGER.debug("SurvivalPanicGoal: super.canUse() = {}", shouldPanicInitially);
+        
+        if (!shouldPanicInitially) {
             return false;
         }
 
-        // Now, add custom logic based on stats/personality
         float survivalStat = lagosEntity.getCapabilityStatValue(CapabilityStat.SURVIVAL);
         float feelingTrait = lagosEntity.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.FEELING);
         float thinkingTrait = lagosEntity.getPersonalityProfile().getTraitValue(PersonalityProfile.TraitAxis.THINKING);
 
-        // Calculate chance to panic. Lower survival or higher feeling increases chance.
-        // Example: Base 50% chance, modified by stats/traits
         float panicChance = 0.5f + (0.5f * (1.0f - survivalStat)) + (0.3f * (feelingTrait - thinkingTrait));
-        panicChance = Math.max(0.05f, Math.min(1.0f, panicChance)); // Clamp chance between 5% and 100%
+        panicChance = Math.max(0.05f, Math.min(1.0f, panicChance));
 
-        boolean shouldPanic = this.lagosEntity.getRandom().nextFloat() < panicChance;
+        float randomRoll = this.lagosEntity.getRandom().nextFloat();
+        boolean shouldPanic = randomRoll < panicChance;
+        
+        Lag0sMod.LOGGER.debug("SurvivalPanicGoal: Survival={}, Feeling={}, Thinking={}, Chance={}, Roll={}, ShouldPanic={}", 
+            survivalStat, feelingTrait, thinkingTrait, panicChance, randomRoll, shouldPanic);
 
         if(shouldPanic) {
-            lagosEntity.gainXp(CapabilityStat.SURVIVAL, 0.5f); // Gain some survival XP for panicking
+            lagosEntity.gainXp(CapabilityStat.SURVIVAL, 0.5f);
         }
 
         return shouldPanic;

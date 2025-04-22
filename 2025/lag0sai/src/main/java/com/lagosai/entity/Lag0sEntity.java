@@ -18,7 +18,7 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.goal.FloatGoal;
 import com.lagosai.entity.ai.goal.LookAtPlayerBasedOnPerceptionGoal;
 import com.lagosai.entity.ai.goal.SurvivalPanicGoal;
-import com.lagosai.entity.ai.goal.PersonalityRandomStrollGoal;
+import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -33,6 +33,11 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.goal.AvoidEntityGoal;
+import net.minecraft.world.entity.monster.Creeper;
+import net.minecraft.world.entity.monster.Zombie;
+import com.lagosai.entity.ai.goal.BreakBlockGoal;
+import com.lagosai.entity.ai.goal.FindShelterOrLightGoal;
 
 public class Lag0sEntity extends PathfinderMob {
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER_UUID_ID = 
@@ -79,9 +84,12 @@ public class Lag0sEntity extends PathfinderMob {
         // AI Goals (Lower number = higher priority)
         this.goalSelector.addGoal(0, new FloatGoal(this)); 
         this.goalSelector.addGoal(1, new SurvivalPanicGoal(this, 1.2D)); 
-        // Replace vanilla goal with our custom one
-        this.goalSelector.addGoal(2, new PersonalityRandomStrollGoal(this, 1.0D)); 
-        this.goalSelector.addGoal(3, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F)); 
+        this.goalSelector.addGoal(2, new AvoidEntityGoal<>(this, Zombie.class, 8.0F, 1.0D, 1.2D)); 
+        this.goalSelector.addGoal(2, new AvoidEntityGoal<>(this, Creeper.class, 10.0F, 1.1D, 1.3D)); 
+        this.goalSelector.addGoal(3, new FindShelterOrLightGoal(this, 1.0D)); 
+        this.goalSelector.addGoal(4, new BreakBlockGoal(this, 1.0D, 8)); 
+        this.goalSelector.addGoal(5, new RandomStrollGoal(this, 1.0D)); 
+        this.goalSelector.addGoal(6, new LookAtPlayerBasedOnPerceptionGoal(this, Player.class, 6.0F)); 
     }
 
     @Override
